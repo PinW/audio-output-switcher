@@ -8,6 +8,7 @@ mod tray;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::Console::{AllocConsole, FreeConsole};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -17,6 +18,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 // Hotkey IDs
 const HOTKEY_TOGGLE: i32 = 1;
 const HOTKEY_OPTIONS: i32 = 2;
+
+// Embedded switch sound
+const SWITCH_SOUND: &[u8] = include_bytes!("../assets/audio_switched_1_quieter.wav");
 
 // Flag to signal reconfigure request from the message loop
 static RECONFIGURE: AtomicBool = AtomicBool::new(false);
@@ -137,16 +141,16 @@ fn toggle_device(cfg: &config::Config) {
         (&cfg.speakers, true)
     };
 
-    let label = if switching_to_speakers {
-        "Speakers"
-    } else {
-        "Headphones"
-    };
-
     match audio::set_default_device(target_id) {
         Ok(()) => {
-            println!("Switched to: {}", label);
             tray::update_state(switching_to_speakers);
+            unsafe {
+                let _ = PlaySoundW(
+                    windows::core::PCWSTR(SWITCH_SOUND.as_ptr() as *const u16),
+                    None,
+                    SND_MEMORY | SND_ASYNC,
+                );
+            }
         }
         Err(e) => eprintln!("Failed to switch device: {}", e),
     }
