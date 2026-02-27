@@ -15,6 +15,10 @@ const TRAY_ICON_ID: u32 = 1;
 // Custom messages posted from wndproc, handled in main message loop
 pub const WM_APP_TOGGLE: u32 = WM_APP + 100;
 pub const WM_APP_RECONFIGURE: u32 = WM_APP + 101;
+// Sent by CLI to update tray icon state (wparam: 1=speakers, 0=headphones)
+pub const WM_APP_REFRESH_STATE: u32 = WM_APP + 102;
+
+pub const MSG_WINDOW_CLASS: &str = "AudioSwitcherMsg";
 
 // Context menu item IDs
 const IDM_RECONFIGURE: usize = 1001;
@@ -156,7 +160,7 @@ fn load_icon_from_ico(ico_data: &[u8]) -> HICON {
 
 fn create_message_window() -> HWND {
     unsafe {
-        let class_name = wide_str("AudioSwitcherMsg");
+        let class_name = wide_str(MSG_WINDOW_CLASS);
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(wndproc),
@@ -268,6 +272,10 @@ unsafe extern "system" fn wndproc(
                 }
                 _ => {}
             }
+            LRESULT(0)
+        }
+        WM_APP_REFRESH_STATE => {
+            update_state(wparam.0 != 0);
             LRESULT(0)
         }
         WM_COMMAND => {

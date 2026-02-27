@@ -8,11 +8,13 @@ mod tray;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::Console::{AllocConsole, FreeConsole};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MSG, WM_HOTKEY,
+    DispatchMessageW, FindWindowW, GetMessageW, SendMessageW, MSG, WM_HOTKEY,
 };
 
 // Hotkey IDs
@@ -31,6 +33,13 @@ fn main() {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED)
             .ok()
             .expect("Failed to initialize COM");
+    }
+
+    // CLI mode: audio-output-switcher.exe [speakers|headphones|toggle]
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        run_cli(&args[1]);
+        return;
     }
 
     // Load or create config (allocate a temporary console for first-time setup)
@@ -120,6 +129,61 @@ fn main() {
     hotkey::unregister();
 }
 
+fn run_cli(command: &str) {
+    let cfg = match config::load() {
+        Some(cfg) => cfg,
+        None => {
+            eprintln!("No config found. Run without arguments to set up.");
+            return;
+        }
+    };
+
+    let target = match command.to_lowercase().as_str() {
+        "speakers" => Some((&cfg.speakers, true)),
+        "headphones" => Some((&cfg.headphones, false)),
+        "toggle" => {
+            let is_spk = is_current_speakers(&cfg);
+            if is_spk {
+                Some((&cfg.headphones, false))
+            } else {
+                Some((&cfg.speakers, true))
+            }
+        }
+        _ => {
+            eprintln!("Usage: audio-output-switcher.exe [speakers|headphones|toggle]");
+            None
+        }
+    };
+
+    if let Some((device_id, is_speakers)) = target {
+        if let Err(e) = audio::set_default_device(device_id) {
+            eprintln!("Failed to switch: {}", e);
+            return;
+        }
+        // Notify running tray instance and play sound (sync so process doesn't exit early)
+        notify_running_instance(is_speakers);
+        play_switch_sound(true);
+    }
+}
+
+fn notify_running_instance(is_speakers: bool) {
+    let class_name: Vec<u16> = tray::MSG_WINDOW_CLASS
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        let hwnd = FindWindowW(PCWSTR(class_name.as_ptr()), PCWSTR::null());
+        if let Ok(hwnd) = hwnd {
+            SendMessageW(
+                hwnd,
+                tray::WM_APP_REFRESH_STATE,
+                Some(WPARAM(is_speakers as usize)),
+                Some(LPARAM(0)),
+            );
+        }
+    }
+}
+
 fn is_current_speakers(cfg: &config::Config) -> bool {
     audio::get_default_device_id()
         .map(|id| id == cfg.speakers)
@@ -144,15 +208,20 @@ fn toggle_device(cfg: &config::Config) {
     match audio::set_default_device(target_id) {
         Ok(()) => {
             tray::update_state(switching_to_speakers);
-            unsafe {
-                let _ = PlaySoundW(
-                    windows::core::PCWSTR(SWITCH_SOUND.as_ptr() as *const u16),
-                    None,
-                    SND_MEMORY | SND_ASYNC,
-                );
-            }
+            play_switch_sound(false);
         }
         Err(e) => eprintln!("Failed to switch device: {}", e),
+    }
+}
+
+fn play_switch_sound(sync: bool) {
+    let flags = if sync { SND_MEMORY } else { SND_MEMORY | SND_ASYNC };
+    unsafe {
+        let _ = PlaySoundW(
+            windows::core::PCWSTR(SWITCH_SOUND.as_ptr() as *const u16),
+            None,
+            flags,
+        );
     }
 }
 
