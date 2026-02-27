@@ -41,9 +41,14 @@ fn load_console_hwnd() -> HWND {
 
 /// Create tray icon with state indicators and hidden message window.
 pub fn setup(is_speakers: bool) {
-    // Cache console HWND
+    // Cache console HWND and remove it from the taskbar
     let console = unsafe { GetConsoleWindow() };
     store_ptr(&CONSOLE_HWND, console.0);
+    unsafe {
+        // WS_EX_TOOLWINDOW hides the window from taskbar and Alt+Tab
+        let style = GetWindowLongW(console, GWL_EXSTYLE);
+        SetWindowLongW(console, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW.0 as i32);
+    }
 
     // Load icons from embedded ICO data
     let spk = load_icon_from_ico(SPEAKERS_ICO);

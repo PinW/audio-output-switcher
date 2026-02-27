@@ -2,3 +2,5 @@
 .env
 .cargo/
 .claude/
+assets/*.psd
+assets/*.png
