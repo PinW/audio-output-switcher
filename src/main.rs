@@ -71,6 +71,14 @@ fn main() {
                         DispatchMessageW(&msg);
                     }
                 }
+                // Handle actions triggered by tray icon clicks / context menu
+                if tray::take_toggle_request() {
+                    toggle_device(&cfg);
+                }
+                if tray::take_reconfigure_request() {
+                    RECONFIGURE.store(true, Ordering::Release);
+                    break;
+                }
             }
             !RECONFIGURE.load(Ordering::Acquire)
         };

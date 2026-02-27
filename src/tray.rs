@@ -1,8 +1,8 @@
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
     NOTIFYICONDATAW,
@@ -12,6 +12,10 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 const WM_TRAYICON: u32 = WM_APP + 1;
 const TRAY_ICON_ID: u32 = 1;
 
+// Context menu item IDs
+const IDM_RECONFIGURE: usize = 1001;
+const IDM_EXIT: usize = 1002;
+
 // Embedded ICO files (multi-resolution, built from pixel art PNGs)
 const SPEAKERS_ICO: &[u8] = include_bytes!("../assets/speakers.ico");
 const HEADPHONES_ICO: &[u8] = include_bytes!("../assets/headphones.ico");
@@ -20,6 +24,10 @@ const HEADPHONES_ICO: &[u8] = include_bytes!("../assets/headphones.ico");
 static MSG_HWND: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static SPEAKER_ICON: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static HEADPHONE_ICON: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+// Action flags set by wndproc, consumed by main message loop
+static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static RECONFIGURE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 fn store_ptr(slot: &AtomicPtr<c_void>, ptr: *mut c_void) {
     slot.store(ptr, Ordering::Release);
@@ -31,6 +39,16 @@ fn load_ptr(slot: &AtomicPtr<c_void>) -> *mut c_void {
 
 fn load_msg_hwnd() -> HWND {
     HWND(load_ptr(&MSG_HWND))
+}
+
+/// Check and clear the toggle request flag.
+pub fn take_toggle_request() -> bool {
+    TOGGLE_REQUESTED.swap(false, Ordering::AcqRel)
+}
+
+/// Check and clear the reconfigure request flag.
+pub fn take_reconfigure_request() -> bool {
+    RECONFIGURE_REQUESTED.swap(false, Ordering::AcqRel)
 }
 
 /// Create tray icon with state indicators and hidden message window.
@@ -219,6 +237,29 @@ fn remove_tray_icon(hwnd: HWND) {
     }
 }
 
+fn show_context_menu(hwnd: HWND) {
+    unsafe {
+        let hmenu = CreatePopupMenu().expect("Failed to create popup menu");
+
+        let reconfig_text = wide_str("Reconfigure");
+        let exit_text = wide_str("Exit");
+
+        let _ = AppendMenuW(hmenu, MF_STRING, IDM_RECONFIGURE, PCWSTR(reconfig_text.as_ptr()));
+        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(hmenu, MF_STRING, IDM_EXIT, PCWSTR(exit_text.as_ptr()));
+
+        let mut pt = POINT::default();
+        let _ = GetCursorPos(&mut pt);
+
+        // Required for popup menu to dismiss when clicking elsewhere
+        let _ = SetForegroundWindow(hwnd);
+
+        let _ = TrackPopupMenu(hmenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, Some(0), hwnd, None);
+
+        let _ = DestroyMenu(hmenu);
+    }
+}
+
 unsafe extern "system" fn wndproc(
     hwnd: HWND,
     msg: u32,
@@ -226,7 +267,32 @@ unsafe extern "system" fn wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        WM_TRAYICON => LRESULT(0),
+        WM_TRAYICON => {
+            let event = lparam.0 as u32;
+            match event {
+                WM_LBUTTONUP => {
+                    TOGGLE_REQUESTED.store(true, Ordering::Release);
+                }
+                WM_RBUTTONUP => {
+                    show_context_menu(hwnd);
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_COMMAND => {
+            let id = wparam.0 & 0xFFFF;
+            match id {
+                IDM_RECONFIGURE => {
+                    RECONFIGURE_REQUESTED.store(true, Ordering::Release);
+                }
+                IDM_EXIT => {
+                    unsafe { PostQuitMessage(0); }
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
