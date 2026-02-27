@@ -4,8 +4,10 @@ use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {
-    pub device_a: String,
-    pub device_b: String,
+    #[serde(alias = "device_a")]
+    pub speakers: String,
+    #[serde(alias = "device_b")]
+    pub headphones: String,
     pub hotkey: String,
 }
 
