@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
@@ -11,6 +11,10 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 const WM_TRAYICON: u32 = WM_APP + 1;
 const TRAY_ICON_ID: u32 = 1;
+
+// Custom messages posted from wndproc, handled in main message loop
+pub const WM_APP_TOGGLE: u32 = WM_APP + 100;
+pub const WM_APP_RECONFIGURE: u32 = WM_APP + 101;
 
 // Context menu item IDs
 const IDM_RECONFIGURE: usize = 1001;
@@ -25,10 +29,6 @@ static MSG_HWND: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static SPEAKER_ICON: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static HEADPHONE_ICON: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
-// Action flags set by wndproc, consumed by main message loop
-static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
-static RECONFIGURE_REQUESTED: AtomicBool = AtomicBool::new(false);
-
 fn store_ptr(slot: &AtomicPtr<c_void>, ptr: *mut c_void) {
     slot.store(ptr, Ordering::Release);
 }
@@ -39,16 +39,6 @@ fn load_ptr(slot: &AtomicPtr<c_void>) -> *mut c_void {
 
 fn load_msg_hwnd() -> HWND {
     HWND(load_ptr(&MSG_HWND))
-}
-
-/// Check and clear the toggle request flag.
-pub fn take_toggle_request() -> bool {
-    TOGGLE_REQUESTED.swap(false, Ordering::AcqRel)
-}
-
-/// Check and clear the reconfigure request flag.
-pub fn take_reconfigure_request() -> bool {
-    RECONFIGURE_REQUESTED.swap(false, Ordering::AcqRel)
 }
 
 /// Create tray icon with state indicators and hidden message window.
@@ -271,7 +261,7 @@ unsafe extern "system" fn wndproc(
             let event = lparam.0 as u32;
             match event {
                 WM_LBUTTONUP => {
-                    TOGGLE_REQUESTED.store(true, Ordering::Release);
+                    unsafe { let _ = PostMessageW(Some(hwnd), WM_APP_TOGGLE, WPARAM(0), LPARAM(0)); }
                 }
                 WM_RBUTTONUP => {
                     show_context_menu(hwnd);
@@ -284,7 +274,7 @@ unsafe extern "system" fn wndproc(
             let id = wparam.0 & 0xFFFF;
             match id {
                 IDM_RECONFIGURE => {
-                    RECONFIGURE_REQUESTED.store(true, Ordering::Release);
+                    unsafe { let _ = PostMessageW(Some(hwnd), WM_APP_RECONFIGURE, WPARAM(0), LPARAM(0)); }
                 }
                 IDM_EXIT => {
                     unsafe { PostQuitMessage(0); }

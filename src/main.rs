@@ -61,23 +61,23 @@ fn main() {
         let exited = unsafe {
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                match (msg.message, msg.wParam.0 as i32) {
-                    (WM_HOTKEY, HOTKEY_TOGGLE) => toggle_device(&cfg),
-                    (WM_HOTKEY, HOTKEY_OPTIONS) => {
+                match msg.message {
+                    WM_HOTKEY => match msg.wParam.0 as i32 {
+                        HOTKEY_TOGGLE => toggle_device(&cfg),
+                        HOTKEY_OPTIONS => {
+                            RECONFIGURE.store(true, Ordering::Release);
+                            break;
+                        }
+                        _ => {}
+                    },
+                    tray::WM_APP_TOGGLE => toggle_device(&cfg),
+                    tray::WM_APP_RECONFIGURE => {
                         RECONFIGURE.store(true, Ordering::Release);
                         break;
                     }
                     _ => {
                         DispatchMessageW(&msg);
                     }
-                }
-                // Handle actions triggered by tray icon clicks / context menu
-                if tray::take_toggle_request() {
-                    toggle_device(&cfg);
-                }
-                if tray::take_reconfigure_request() {
-                    RECONFIGURE.store(true, Ordering::Release);
-                    break;
                 }
             }
             !RECONFIGURE.load(Ordering::Acquire)
