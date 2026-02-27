@@ -1,11 +1,16 @@
 use std::ffi::c_void;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-use windows::core::PCWSTR;
+use windows::core::{PCWSTR, Interface, BSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
+    COINIT_APARTMENTTHREADED,
+};
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFYICONDATAW,
+    IShellLinkW, Shell_NotifyIconW, ShellLink, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD,
+    NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -23,6 +28,7 @@ pub const MSG_WINDOW_CLASS: &str = "AudioSwitcherMsg";
 // Context menu item IDs
 const IDM_RECONFIGURE: usize = 1001;
 const IDM_EXIT: usize = 1002;
+const IDM_AUTOSTART: usize = 1003;
 
 // Embedded ICO files (multi-resolution, built from pixel art PNGs)
 const SPEAKERS_ICO: &[u8] = include_bytes!("../assets/speakers.ico");
@@ -231,14 +237,76 @@ fn remove_tray_icon(hwnd: HWND) {
     }
 }
 
+fn startup_shortcut_path() -> PathBuf {
+    // %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\AudioSwitcher.lnk
+    let appdata = dirs::config_dir().expect("Failed to find APPDATA");
+    appdata
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs")
+        .join("Startup")
+        .join("AudioSwitcher.lnk")
+}
+
+fn is_autostart_enabled() -> bool {
+    startup_shortcut_path().exists()
+}
+
+fn set_autostart(enable: bool) {
+    let shortcut_path = startup_shortcut_path();
+    if enable {
+        let exe_path = std::env::current_exe().expect("Failed to get current exe path");
+        let exe_dir = exe_path.parent().expect("Failed to get exe directory");
+
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+            let result: Result<(), windows::core::Error> = (|| {
+                let shell_link: IShellLinkW =
+                    CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+
+                let exe_wide = wide_str(&exe_path.to_string_lossy());
+                shell_link.SetPath(PCWSTR(exe_wide.as_ptr()))?;
+
+                let dir_wide = wide_str(&exe_dir.to_string_lossy());
+                shell_link.SetWorkingDirectory(PCWSTR(dir_wide.as_ptr()))?;
+
+                let persist_file: IPersistFile = shell_link.cast()?;
+                let link_wide = BSTR::from(shortcut_path.to_string_lossy().as_ref());
+                persist_file.Save(&link_wide, true)?;
+
+                Ok(())
+            })();
+
+            CoUninitialize();
+
+            if let Err(e) = result {
+                eprintln!("Failed to create startup shortcut: {e}");
+            }
+        }
+    } else {
+        let _ = std::fs::remove_file(&shortcut_path);
+    }
+}
+
 fn show_context_menu(hwnd: HWND) {
     unsafe {
         let hmenu = CreatePopupMenu().expect("Failed to create popup menu");
 
         let reconfig_text = wide_str("Reconfigure");
+        let autostart_text = wide_str("Start with Windows");
         let exit_text = wide_str("Exit");
 
         let _ = AppendMenuW(hmenu, MF_STRING, IDM_RECONFIGURE, PCWSTR(reconfig_text.as_ptr()));
+
+        let autostart_flags = if is_autostart_enabled() {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING | MF_UNCHECKED
+        };
+        let _ = AppendMenuW(hmenu, autostart_flags, IDM_AUTOSTART, PCWSTR(autostart_text.as_ptr()));
+
         let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(hmenu, MF_STRING, IDM_EXIT, PCWSTR(exit_text.as_ptr()));
 
@@ -283,6 +351,9 @@ unsafe extern "system" fn wndproc(
             match id {
                 IDM_RECONFIGURE => {
                     unsafe { let _ = PostMessageW(Some(hwnd), WM_APP_RECONFIGURE, WPARAM(0), LPARAM(0)); }
+                }
+                IDM_AUTOSTART => {
+                    set_autostart(!is_autostart_enabled());
                 }
                 IDM_EXIT => {
                     unsafe { PostQuitMessage(0); }
