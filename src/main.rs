@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 mod audio;
 mod config;
 mod hotkey;
@@ -7,6 +9,7 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Console::{AllocConsole, FreeConsole};
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MSG, WM_HOTKEY,
 };
@@ -26,23 +29,17 @@ fn main() {
             .expect("Failed to initialize COM");
     }
 
-    // Load or create config
+    // Load or create config (allocate a temporary console for first-time setup)
     let mut cfg = match config::load() {
-        Some(cfg) => {
-            println!("Loaded config.");
-            println!("  Speakers:   {}", cfg.speakers);
-            println!("  Headphones: {}", cfg.headphones);
-            println!("  Hotkey:     {}", cfg.hotkey);
-            cfg
-        }
+        Some(cfg) => cfg,
         None => {
+            unsafe { let _ = AllocConsole(); }
             println!("No config found. Running first-time setup...\n");
-            match run_setup() {
+            let result = run_setup();
+            unsafe { let _ = FreeConsole(); }
+            match result {
                 Some(cfg) => cfg,
-                None => {
-                    eprintln!("Setup cancelled.");
-                    return;
-                }
+                None => return,
             }
         }
     };
@@ -51,18 +48,13 @@ fn main() {
     let is_speakers = is_current_speakers(&cfg);
 
     // Register toggle hotkey
-    if let Err(e) = hotkey::register(&cfg.hotkey) {
-        eprintln!("Error: {}", e);
+    if hotkey::register(&cfg.hotkey).is_err() {
         return;
     }
-    // Register Ctrl+O as options hotkey (only fires when console is focused)
     hotkey::register_options();
 
-    println!("Hotkey [{}] registered. Minimizing to tray.", cfg.hotkey);
-
-    // Set up tray with initial state and hide console
+    // Set up tray with initial state
     tray::setup(is_speakers);
-    tray::hide_console();
 
     // Message loop
     loop {
@@ -87,27 +79,26 @@ fn main() {
             break; // WM_QUIT — app is closing
         }
 
-        // Reconfigure: show console, re-run setup
+        // Reconfigure: allocate temporary console, re-run setup
         RECONFIGURE.store(false, Ordering::Release);
         hotkey::unregister();
-        tray::show_console();
 
+        unsafe { let _ = AllocConsole(); }
         println!("\n--- Reconfigure ---\n");
-        match run_setup() {
+        let result = run_setup();
+        unsafe { let _ = FreeConsole(); }
+
+        match result {
             Some(new_cfg) => {
                 cfg = new_cfg;
                 let is_spk = is_current_speakers(&cfg);
-                if let Err(e) = hotkey::register(&cfg.hotkey) {
-                    eprintln!("Error: {}", e);
+                if hotkey::register(&cfg.hotkey).is_err() {
                     break;
                 }
                 hotkey::register_options();
                 tray::update_state(is_spk);
-                tray::hide_console();
-                println!("Hotkey [{}] registered. Minimizing to tray.", cfg.hotkey);
             }
             None => {
-                eprintln!("Setup cancelled. Exiting.");
                 break;
             }
         }

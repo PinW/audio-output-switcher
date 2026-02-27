@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::Console::GetConsoleWindow;
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
     NOTIFYICONDATAW,
@@ -19,7 +18,6 @@ const HEADPHONES_ICO: &[u8] = include_bytes!("../assets/headphones.ico");
 
 // Stored handles (HWND/HICON aren't Send+Sync, so use AtomicPtr)
 static MSG_HWND: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
-static CONSOLE_HWND: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static SPEAKER_ICON: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static HEADPHONE_ICON: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
@@ -35,21 +33,8 @@ fn load_msg_hwnd() -> HWND {
     HWND(load_ptr(&MSG_HWND))
 }
 
-fn load_console_hwnd() -> HWND {
-    HWND(load_ptr(&CONSOLE_HWND))
-}
-
 /// Create tray icon with state indicators and hidden message window.
 pub fn setup(is_speakers: bool) {
-    // Cache console HWND and remove it from the taskbar
-    let console = unsafe { GetConsoleWindow() };
-    store_ptr(&CONSOLE_HWND, console.0);
-    unsafe {
-        // WS_EX_TOOLWINDOW hides the window from taskbar and Alt+Tab
-        let style = GetWindowLongW(console, GWL_EXSTYLE);
-        SetWindowLongW(console, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW.0 as i32);
-    }
-
     // Load icons from embedded ICO data
     let spk = load_icon_from_ico(SPEAKERS_ICO);
     let hp = load_icon_from_ico(HEADPHONES_ICO);
@@ -103,39 +88,6 @@ pub fn update_state(is_speakers: bool) {
     };
     unsafe {
         let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
-    }
-}
-
-/// Hide the console window.
-pub fn hide_console() {
-    unsafe {
-        let _ = ShowWindow(load_console_hwnd(), SW_HIDE);
-    }
-}
-
-/// Show and restore the console window, bringing it to the foreground.
-pub fn show_console() {
-    let hwnd = load_console_hwnd();
-    unsafe {
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = ShowWindow(hwnd, SW_RESTORE);
-
-        // Briefly set topmost then remove — reliably brings window to front
-        let topmost = HWND(-1isize as *mut c_void);
-        let notopmost = HWND(-2isize as *mut c_void);
-        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW;
-        let _ = SetWindowPos(hwnd, Some(topmost), 0, 0, 0, 0, flags);
-        let _ = SetWindowPos(hwnd, Some(notopmost), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-    }
-}
-
-/// Toggle console visibility: hide if visible, show if hidden.
-fn toggle_console() {
-    let hwnd = load_console_hwnd();
-    if unsafe { IsWindowVisible(hwnd) }.as_bool() {
-        hide_console();
-    } else {
-        show_console();
     }
 }
 
@@ -274,13 +226,7 @@ unsafe extern "system" fn wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        WM_TRAYICON => {
-            let event = lparam.0 as u32;
-            if event == WM_LBUTTONUP {
-                toggle_console();
-            }
-            LRESULT(0)
-        }
+        WM_TRAYICON => LRESULT(0),
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
