@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
-use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY};
+use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_FILENAME, SND_MEMORY};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::Console::{AllocConsole, FreeConsole};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -21,8 +21,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const HOTKEY_TOGGLE: i32 = 1;
 const HOTKEY_OPTIONS: i32 = 2;
 
-// Embedded switch sound
-const SWITCH_SOUND: &[u8] = include_bytes!("../assets/audio_switched_1_quieter.wav");
+// Embedded switch sound (default)
+const SWITCH_SOUND: &[u8] = include_bytes!("../assets/Windows Background.wav");
 
 // Flag to signal reconfigure request from the message loop
 static RECONFIGURE: AtomicBool = AtomicBool::new(false);
@@ -215,13 +215,26 @@ fn toggle_device(cfg: &config::Config) {
 }
 
 fn play_switch_sound(sync: bool) {
-    let flags = if sync { SND_MEMORY } else { SND_MEMORY | SND_ASYNC };
-    unsafe {
-        let _ = PlaySoundW(
-            windows::core::PCWSTR(SWITCH_SOUND.as_ptr() as *const u16),
-            None,
-            flags,
-        );
+    // Check for notify.wav next to the exe — use that if it exists, otherwise embedded default
+    if let Some(notify_path) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("notify.wav")))
+        .filter(|p| p.exists())
+    {
+        let path_wide: Vec<u16> = notify_path
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let flags = if sync { SND_FILENAME } else { SND_FILENAME | SND_ASYNC };
+        unsafe {
+            let _ = PlaySoundW(PCWSTR(path_wide.as_ptr()), None, flags);
+        }
+    } else {
+        let flags = if sync { SND_MEMORY } else { SND_MEMORY | SND_ASYNC };
+        unsafe {
+            let _ = PlaySoundW(PCWSTR(SWITCH_SOUND.as_ptr() as *const u16), None, flags);
+        }
     }
 }
 
