@@ -9,6 +9,12 @@ pub struct Config {
     #[serde(alias = "device_b")]
     pub headphones: String,
     pub hotkey: String,
+    #[serde(default = "default_true")]
+    pub notify_sound: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Path to the config file: %APPDATA%\AudioSwitcher\config.json

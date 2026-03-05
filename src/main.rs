@@ -19,7 +19,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 // Hotkey IDs
 const HOTKEY_TOGGLE: i32 = 1;
-const HOTKEY_OPTIONS: i32 = 2;
 
 // Embedded switch sound (default)
 const SWITCH_SOUND: &[u8] = include_bytes!("../assets/Windows Background.wav");
@@ -64,9 +63,9 @@ fn main() {
     if hotkey::register(&cfg.hotkey).is_err() {
         return;
     }
-    hotkey::register_options();
 
     // Set up tray with initial state
+    tray::set_notify_sound(cfg.notify_sound);
     tray::setup(is_speakers);
 
     // Message loop
@@ -77,13 +76,14 @@ fn main() {
                 match msg.message {
                     WM_HOTKEY => match msg.wParam.0 as i32 {
                         HOTKEY_TOGGLE => toggle_device(&cfg),
-                        HOTKEY_OPTIONS => {
-                            RECONFIGURE.store(true, Ordering::Release);
-                            break;
-                        }
                         _ => {}
                     },
                     tray::WM_APP_TOGGLE => toggle_device(&cfg),
+                    tray::WM_APP_TOGGLE_SOUND => {
+                        cfg.notify_sound = !cfg.notify_sound;
+                        tray::set_notify_sound(cfg.notify_sound);
+                        config::save(&cfg);
+                    }
                     tray::WM_APP_RECONFIGURE => {
                         RECONFIGURE.store(true, Ordering::Release);
                         break;
@@ -116,7 +116,7 @@ fn main() {
                 if hotkey::register(&cfg.hotkey).is_err() {
                     break;
                 }
-                hotkey::register_options();
+                tray::set_notify_sound(cfg.notify_sound);
                 tray::update_state(is_spk);
             }
             None => {
@@ -215,6 +215,9 @@ fn toggle_device(cfg: &config::Config) {
 }
 
 fn play_switch_sound(sync: bool) {
+    if !tray::is_notify_sound() {
+        return;
+    }
     // Check for notify.wav next to the exe — use that if it exists, otherwise embedded default
     if let Some(notify_path) = std::env::current_exe()
         .ok()
@@ -269,6 +272,7 @@ fn run_setup() -> Option<config::Config> {
         speakers: devices[a].id.clone(),
         headphones: devices[b].id.clone(),
         hotkey: hotkey_str,
+        notify_sound: true,
     };
 
     config::save(&cfg);

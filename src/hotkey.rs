@@ -6,7 +6,6 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 
 const HOTKEY_TOGGLE: i32 = 1;
-const HOTKEY_OPTIONS: i32 = 2;
 
 /// Parse a hotkey string like "Ctrl+Alt+S" into (modifiers, virtual_key).
 pub fn parse_hotkey(s: &str) -> Result<(HOT_KEY_MODIFIERS, VIRTUAL_KEY), String> {
@@ -90,23 +89,9 @@ pub fn register(hotkey_str: &str) -> Result<(), String> {
     }
 }
 
-/// Register Ctrl+O as the options/reconfigure hotkey.
-pub fn register_options() {
-    unsafe {
-        // VK_O = 0x4F
-        let _ = RegisterHotKey(
-            None,
-            HOTKEY_OPTIONS,
-            MOD_CONTROL | MOD_NOREPEAT,
-            0x4F,
-        );
-    }
-}
-
 /// Unregister all hotkeys.
 pub fn unregister() {
     unsafe {
         let _ = UnregisterHotKey(None, HOTKEY_TOGGLE);
-        let _ = UnregisterHotKey(None, HOTKEY_OPTIONS);
     }
 }

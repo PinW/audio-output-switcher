@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use windows::core::{PCWSTR, Interface, BSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
@@ -22,6 +22,7 @@ pub const WM_APP_TOGGLE: u32 = WM_APP + 100;
 pub const WM_APP_RECONFIGURE: u32 = WM_APP + 101;
 // Sent by CLI to update tray icon state (wparam: 1=speakers, 0=headphones)
 pub const WM_APP_REFRESH_STATE: u32 = WM_APP + 102;
+pub const WM_APP_TOGGLE_SOUND: u32 = WM_APP + 103;
 
 pub const MSG_WINDOW_CLASS: &str = "AudioSwitcherMsg";
 
@@ -29,6 +30,7 @@ pub const MSG_WINDOW_CLASS: &str = "AudioSwitcherMsg";
 const IDM_RECONFIGURE: usize = 1001;
 const IDM_EXIT: usize = 1002;
 const IDM_AUTOSTART: usize = 1003;
+const IDM_NOTIFY_SOUND: usize = 1004;
 
 // Embedded ICO files (multi-resolution, built from pixel art PNGs)
 const SPEAKERS_ICO: &[u8] = include_bytes!("../assets/speakers.ico");
@@ -38,6 +40,7 @@ const HEADPHONES_ICO: &[u8] = include_bytes!("../assets/headphones.ico");
 static MSG_HWND: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static SPEAKER_ICON: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static HEADPHONE_ICON: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+static NOTIFY_SOUND: AtomicBool = AtomicBool::new(true);
 
 fn store_ptr(slot: &AtomicPtr<c_void>, ptr: *mut c_void) {
     slot.store(ptr, Ordering::Release);
@@ -49,6 +52,14 @@ fn load_ptr(slot: &AtomicPtr<c_void>) -> *mut c_void {
 
 fn load_msg_hwnd() -> HWND {
     HWND(load_ptr(&MSG_HWND))
+}
+
+pub fn set_notify_sound(enabled: bool) {
+    NOTIFY_SOUND.store(enabled, Ordering::Release);
+}
+
+pub fn is_notify_sound() -> bool {
+    NOTIFY_SOUND.load(Ordering::Acquire)
 }
 
 /// Create tray icon with state indicators and hidden message window.
@@ -295,10 +306,20 @@ fn show_context_menu(hwnd: HWND) {
         let hmenu = CreatePopupMenu().expect("Failed to create popup menu");
 
         let reconfig_text = wide_str("Reconfigure");
+        let sound_text = wide_str("Notification Sound");
         let autostart_text = wide_str("Start with Windows");
         let exit_text = wide_str("Exit");
 
         let _ = AppendMenuW(hmenu, MF_STRING, IDM_RECONFIGURE, PCWSTR(reconfig_text.as_ptr()));
+
+        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+
+        let sound_flags = if is_notify_sound() {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING | MF_UNCHECKED
+        };
+        let _ = AppendMenuW(hmenu, sound_flags, IDM_NOTIFY_SOUND, PCWSTR(sound_text.as_ptr()));
 
         let autostart_flags = if is_autostart_enabled() {
             MF_STRING | MF_CHECKED
@@ -351,6 +372,9 @@ unsafe extern "system" fn wndproc(
             match id {
                 IDM_RECONFIGURE => {
                     unsafe { let _ = PostMessageW(Some(hwnd), WM_APP_RECONFIGURE, WPARAM(0), LPARAM(0)); }
+                }
+                IDM_NOTIFY_SOUND => {
+                    unsafe { let _ = PostMessageW(Some(hwnd), WM_APP_TOGGLE_SOUND, WPARAM(0), LPARAM(0)); }
                 }
                 IDM_AUTOSTART => {
                     set_autostart(!is_autostart_enabled());
